@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RG Lua <-> TS Translation Layer</title>
+    <style>
+        :root {
+            --bg: #1e1e1e;
+            --panel: #252526;
+            --text: #d4d4d4;
+            --keyword: #569cd6;
+            --string: #ce9178;
+            --accent: #007acc;
+        }
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+        .column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+            padding: 10px;
+            min-width: 0;
+        }
+        h2 { margin: 0 0 10px 0; font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        
+        /* Editors */
+        textarea {
+            flex: 1;
+            background-color: var(--panel);
+            color: var(--text);
+            border: 1px solid #3e3e42;
+            padding: 10px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            resize: none;
+            outline: none;
+            white-space: pre;
+            overflow: auto;
+        }
+        
+        /* Simulator */
+        .preview-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #111;
+            border: 1px solid #333;
+            margin-bottom: 10px;
+            padding: 20px;
+        }
+        canvas {
+            image-rendering: pixelated;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background: black;
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: var(--panel);
+            padding: 15px;
+            border-radius: 4px;
+        }
+        label { display: flex; justify-content: space-between; font-size: 12px; }
+        input[type="range"] { width: 100%; }
+        
+        button {
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        button:hover { background-color: #0062a3; }
+        
+        .output-code {
+            flex: 1;
+            background-color: #1a1a1a;
+            color: #9cdcfe;
+            padding: 10px;
+            font-family: monospace;
+            overflow: auto;
+            border: 1px solid #333;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- LEFT: LUA SOURCE -->
+    <div class="column">
+        <h2>Retro Gadgets Lua Source</h2>
+        <textarea id="luaSource" spellcheck="false">-- Retro Gadgets
+local vid = gdt.VideoChip0
+local slider1 = gdt.Slider0
+local slider2 = gdt.Slider1
+local cpu = gdt.CPU0
+
+local posX = 0
+local posY = 0
+local velX = 1
+local velY = 1 
+local hue = 0
+
+t = 0
+
+function update()
+    t += cpu.DeltaTime
+    local hueSlider = slider1.Value * 1.8
+    local speedSlider = slider2.Value * 1.8
+
+    hue = hueSlider * 2.2012
+    
+    if hue > 360 then hue = hue - 360 end
+    if hue < 0 then hue = hue + 360 end
+        
+    vid:Clear(color.black)
+    if (speedSlider == 180) then
+        vid:Clear(color.green)
+    end
+
+    local speedFactor = 0.05 + speedSlider / 50
+    local currentVelX = velX > 0 and speedFactor or -speedFactor
+    local currentVelY = velY > 0 and speedFactor or -speedFactor
+
+    posX += currentVelX
+    posY += currentVelY
+
+    if (posX < 0) then posX = 0; velX = speedFactor end
+    if (posX > 64 - 6) then posX = 64 - 6; velX = -speedFactor end
+    if (posY < 0) then posY = 0; velY = speedFactor end
+    if (posY > 36 - 6) then posY = 36 - 6; velY = -speedFactor end
+
+    local amplitude = 18 * hueSlider / 164
+    local frequency = 0.1 * speedSlider / 164 + 0.05;
+    local phase = t;
+    local centerY = 36 / 2
+    for waveI = 0, 10, 1 do
+        for x = 0, 64, 1 do
+            local y = centerY + math.sin(x * frequency + phase - 0.25 * waveI) * amplitude;
+            vid:SetPixel(vec2(x, y), ColorHSV(math.round(hue + 30 * waveI) , 90, 80 - 3.8 * waveI))
+        end
+    end
+    vid:FillRect(vec2(posX, posY), vec2(posX+6, posY+6), ColorHSV(hue, 90, 90))
+end</textarea>
+        <div class="controls">
+            <button onclick="runSimulation()">▶ Run in Simulator</button>
+            <button onclick="translateToTS()">⇄ Translate to TypeScript</button>
+        </div>
+    </div>
+
+    <!-- MIDDLE: SIMULATOR -->
+    <div class="column">
+        <h2>Simulator (Canvas)</h2>
+        <div class="preview-area">
+            <canvas id="simCanvas" width="64" height="64" style="width: 256px; height: 256px;"></canvas>
+        </div>
+        <div class="controls">
+            <label><span>Slider 0 (Hue)</span> <span id="val0">0</span></label>
+            <input type="range" id="inputS0" min="0" max="100" value="0">
+            
+            <label><span>Slider 1 (Speed)</span> <span id="val1">0</span></label>
+            <input type="range" id="inputS1" min="0" max="100" value="0">
+        </div>
+        <div style="margin-top: 20px; font-size: 12px; color: #666;">
+            * Simulator transpiles Lua to JS on the fly using a regex-based translation layer.
+        </div>
+    </div>
+
+    <!-- RIGHT: TS OUTPUT -->
+    <div class="column">
+        <h2>TypeScript React Output</h2>
+        <div id="tsOutput" class="output-code">// Click 'Translate to TypeScript' to generate code...</div>
+    </div>
+</div>
+
+<script>
+    /** 
+     * THE TRANSLATION LAYER KERNEL 
+     * This section provides the Shims to make JS look/act like RG Lua
+     */
+
+    // 1. Math Shim
+    const math = {
+        sin: Math.sin,
+        cos: Math.cos,
+        round: Math.round,
+        floor: Math.floor,
+        abs: Math.abs,
+        random: Math.random,
+        min: Math.min,
+        max: Math.max
+    };
+
+    // 2. Vector Shim
+    class Vec2 {
+        constructor(x, y) { this.x = x; this.y = y; }
+    }
+    const vec2 = (x, y) => new Vec2(x, y);
+
+    // 3. Color Shim
+    const color = {
+        black: "black",
+        white: "white",
+        red: "red",
+        green: "green",
+        blue: "blue"
+    };
+
+    // HSV to CSS HSL converter
+    function ColorHSV(h, s, v) {
+        // Lua RG usually uses h=0-360, s=0-100, v=0-100
+        // CSS HSL is h=0-360, s=0-100%, l=0-100%
+        // Simple approximation: HSL Lightness is roughly Value / 2 (not exact but close enough for viz)
+        return `hsl(${h}, ${s}%, ${v/2}%)`; 
+    }
+
+    // 4. Hardware Mock (GDT)
+    const gdt = {
+        VideoChip0: {
+            Width: 64,
+            Height: 64,
+            ctx: null, // assigned at runtime
+            Clear: function(c) {
+                this.ctx.fillStyle = c;
+                this.ctx.fillRect(0, 0, this.Width, this.Height);
+            },
+            SetPixel: function(pos, c) {
+                this.ctx.fillStyle = c;
+                this.ctx.fillRect(Math.floor(pos.x), Math.floor(pos.y), 1, 1);
+            },
+            FillRect: function(pos1, pos2, c) {
+                this.ctx.fillStyle = c;
+                let w = pos2.x - pos1.x;
+                let h = pos2.y - pos1.y;
+                this.ctx.fillRect(pos1.x, pos1.y, w, h);
+            },
+            DrawRect: function(pos, size, c) {
+                this.ctx.fillStyle = c;
+                this.ctx.fillRect(pos.x, pos.y, size.x, size.y);
+            }
+        },
+        Slider0: { Value: 0 },
+        Slider1: { Value: 0 },
+        CPU0: { DeltaTime: 0.016 }
+    };
+
+    /**
+     * LUA TO JS TRANSPILER (REGEX BASED)
+     */
+    function luaToJs(luaCode) {
+        let js = luaCode;
+
+        // 1. Variables
+        js = js.replace(/^local /gm, 'let ');
+        
+        // 2. Operators
+        // Lua 'and'/'or' in assignments
+        js = js.replace(/ and /g, ' && ');
+        js = js.replace(/ or /g, ' || ');
+        // Not equals
+        js = js.replace(/~=/g, '!=');
+
+        // 3. Loops: for i = start, end, step do
+        // This is tricky. We'll handle the specific case in the example: for waveI = 0, 10, 1 do
+        js = js.replace(/for\s+(\w+)\s*=\s*([\d\.]+)\s*,\s*([\d\.]+)\s*,\s*([\d\.]+)\s*do/g, 
+            'for (let $1 = $2; $1 <= $3; $1 += $4) {');
+        // Simple case: for x = 0, 64 do (defaults to step 1)
+        js = js.replace(/for\s+(\w+)\s*=\s*([\d\.]+)\s*,\s*([\d\.]+)\s*do/g, 
+            'for (let $1 = $2; $1 <= $3; $1++) {');
+
+        // 4. Conditions
+        // if ... then
+        js = js.replace(/if\s+(.*?)\s+then/g, 'if ($1) {');
+        // elseif
+        js = js.replace(/elseif\s+(.*?)\s+then/g, '} else if ($1) {');
+        // else
+        js = js.replace(/else/g, '} else {');
+
+        // 5. Blocks
+        // Lua 'end' closes function, if, and for. In JS, it's just '}'
+        // We replace 'end' with '}' globally. 
+        // NOTE: This assumes well-formatted Lua where 'end' is on its own line or end of line.
+        js = js.replace(/\bend\b/g, '}');
+
+        // 6. Functions
+        // function update() -> function update() {
+        // We already handled 'end' -> '}', so we just need the start.
+        js = js.replace(/function\s+(\w+)\((.*?)\)/g, 'function $1($2) {');
+
+        // 7. Misc
+        // Fix comments: -- -> //
+        js = js.replace(/--/g, '//');
+        
+        return js;
+    }
+
+    /**
+     * SIMULATION ENGINE
+     */
+    let animationId = null;
+    let userUpdateFunc = null;
+
+    function runSimulation() {
+        const luaCode = document.getElementById('luaSource').value;
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Setup hardware
+        gdt.VideoChip0.ctx = ctx;
+
+        // Cancel previous run
+        if (animationId) cancelAnimationFrame(animationId);
+
+        try {
+            // Transpile
+            const jsCode = luaToJs(luaCode);
+            console.log("Transpiled JS:\n", jsCode);
+
+            // Execute in global scope (dangerous in prod, fine for local tool)
+            // We wrap it in a function to capture variables, but we need 'update' to be exposed.
+            // A simple way is to eval it, and assume 'update' is defined.
+            
+            // Reset global simulation vars if strictly defined in code
+            // (In a real app we'd use a sandboxed worker, here we just Eval)
+            window.eval(jsCode); 
+            
+            if (typeof window.update === 'function') {
+                userUpdateFunc = window.update;
+                loop();
+            } else {
+                alert("No 'function update()' found in code.");
+            }
+
+        } catch (e) {
+            console.error(e);
+            alert("Error in Lua conversion: " + e.message);
+        }
+    }
+
+    function loop() {
+        // Update inputs
+        gdt.Slider0.Value = parseFloat(document.getElementById('inputS0').value);
+        gdt.Slider1.Value = parseFloat(document.getElementById('inputS1').value);
+        
+        document.getElementById('val0').innerText = gdt.Slider0.Value;
+        document.getElementById('val1').innerText = gdt.Slider1.Value;
+
+        // Run user code
+        if (userUpdateFunc) userUpdateFunc();
+
+        animationId = requestAnimationFrame(loop);
+    }
+
+    /**
+     * TS GENERATOR (Translate Lua Logic to React Component format)
+     */
+    function translateToTS() {
+        const luaCode = document.getElementById('luaSource').value;
+        
+        // 1. Extract globals (local x = 0)
+        const globals = [];
+        const lines = luaCode.split('\n');
+        let bodyCode = "";
+        
+        let insideUpdate = false;
+
+        lines.forEach(line => {
+            // Very naive parser for demonstration
+            const trimmed = line.trim();
+            if (trimmed.startsWith('local ') && !insideUpdate && trimmed.includes('=')) {
+                // Is it a hardware ref?
+                if (trimmed.includes('gdt.')) return; 
+                
+                // Parse "local posX = 0"
+                const parts = trimmed.replace('local ', '').split('=');
+                const name = parts[0].trim();
+                const val = parts[1].trim();
+                globals.push({name, val});
+            } else if (trimmed.startsWith('function update()')) {
+                insideUpdate = true;
+            } else if (trimmed.startsWith('end') && insideUpdate) {
+                insideUpdate = false;
+            } else if (insideUpdate) {
+                bodyCode += line + "\n";
+            }
+        });
+
+        // 2. Transpile Body
+        let tsBody = luaToJs(bodyCode);
+        
+        // Clean up TS specific syntaxes
+        tsBody = tsBody.replace(/vec2\((.*?)\)/g, 'draw.rect($1, 1, 1)'); // simplistic replacement
+        tsBody = tsBody.replace(/vid:SetPixel\((.*?),\s*(.*?)\)/g, 'vid.fillStyle = $2; draw.rect($1.x, $1.y, 1, 1);');
+        tsBody = tsBody.replace(/vid:FillRect\((.*?),\s*(.*?),\s*(.*?)\)/g, 'vid.fillStyle = $3; draw.rect($1.x, $1.y, $2.x-$1.x, $2.y-$1.y);');
+        tsBody = tsBody.replace(/vid:Clear\((.*?)\)/g, 'vid.fillStyle = $1; vid.fillRect(0,0,64,36);');
+        tsBody = tsBody.replace(/slider1.Value/g, 'hueSlider');
+        tsBody = tsBody.replace(/slider2.Value/g, 'speedSlider');
+        tsBody = tsBody.replace(/color\./g, ''); // color.black -> black (CSS)
+
+        // Generate the Screen2Vars interface
+        const interfaceProps = globals.map(g => `${g.name}: number`).join(',\n    ');
+        const defaultState = globals.map(g => `${g.name}: ${g.val}`).join(',\n        ');
+        const destructure = globals.map(g => g.name).join(', ');
+
+        const finalOutput = `
+// 1. State Definition
+interface Screen2Vars {
+    ${interfaceProps}
+}
+
+// 2. React Ref Initialization
+const screen2Vars = useRef<Screen2Vars>({
+        ${defaultState}
+});
+
+// 3. The Draw Function
+const drawScreen2 = (
+    vid: CanvasRenderingContext2D,
+    t: number, 
+    speedSlider: number,
+    hueSlider: number,
+    self: Screen2Vars
+) => {
+    // Helper shim for drawing
+    const draw = { rect: (x,y,w,h) => vid.fillRect(x,y,w,h) };
+
+    // Destructure state
+    let { ${destructure} } = self;
+
+    // --- Translated Logic Start ---
+${tsBody}
+    // --- Translated Logic End ---
+
+    // Save state back
+    Object.assign(self, { ${destructure} });
+};
+        `;
+
+        document.getElementById('tsOutput').innerText = finalOutput.trim();
+    }
+
+    // Initialize
+    runSimulation();
+</script>
+
+</body>
+</html>
